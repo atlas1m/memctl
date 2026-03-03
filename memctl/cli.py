@@ -339,6 +339,38 @@ def health():
 
 
 @main.group()
+def license():
+    """License key management."""
+
+
+@license.command("set")
+@click.argument("key")
+def license_set(key: str):
+    """Save your memctl Pro license key.
+
+    \b
+    Example:
+        memctl license set polar_order_xxxxxxxx
+    """
+    from memctl.license import set_license_key
+    set_license_key(key)
+    console.print(f"[green]✓[/green] License key saved. Pro features unlocked.")
+
+
+@license.command("status")
+def license_status():
+    """Check license status."""
+    from memctl.license import is_pro, get_license_key
+    key = get_license_key()
+    if is_pro():
+        console.print(f"[green]✓ memctl Pro — active[/green]")
+        console.print(f"  Key: {key[:8]}{'*' * max(0, len(key)-8)}")
+    else:
+        console.print("[yellow]memctl Core (free)[/yellow]")
+        console.print("  Upgrade: https://polar.sh/atlas1m")
+
+
+@main.group()
 def mcp():
     """MCP server commands (for Claude Desktop, Cursor, Windsurf)."""
 
