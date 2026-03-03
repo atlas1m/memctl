@@ -132,6 +132,30 @@ def forget(memory_id: str):
 
 
 @main.command()
+def agents():
+    """List all agents and their memory stats.
+
+    \b
+    Example:
+        memctl agents
+    """
+    s = get_stats()
+    if not s["agents"]:
+        console.print("[yellow]No agents found. Use --agent <name> to create one.[/yellow]")
+        return
+
+    table = Table(title="Registered Agents", show_header=True)
+    table.add_column("Agent", style="bold")
+    table.add_column("Memories", justify="right", width=10)
+
+    for agent_name, count in sorted(s["agents"].items(), key=lambda x: -x[1]):
+        table.add_row(agent_name, str(count))
+
+    console.print(table)
+    console.print(f"\n  Total memories: [cyan]{s['total_memories']}[/cyan] across {s['agents_count']} agent(s)")
+
+
+@main.command()
 def stats():
     """Show memory database statistics.
 
