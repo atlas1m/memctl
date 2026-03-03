@@ -6,6 +6,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
+from memctl.embeddings import (
+    embed_text,
+    pack_embedding,
+    unpack_embedding,
+    cosine_similarity,
+)
 
 DB_PATH = Path.home() / ".memctl" / "memory.db"
 
@@ -24,15 +30,16 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     """Create tables if they don't exist yet."""
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS memories (
-            id          TEXT PRIMARY KEY,
-            agent       TEXT NOT NULL DEFAULT 'default',
-            content     TEXT NOT NULL,
-            tags        TEXT NOT NULL DEFAULT '',
-            importance  REAL NOT NULL DEFAULT 0.5,
-            created_at  TEXT NOT NULL,
+            id            TEXT PRIMARY KEY,
+            agent         TEXT NOT NULL DEFAULT 'default',
+            content       TEXT NOT NULL,
+            tags          TEXT NOT NULL DEFAULT '',
+            importance    REAL NOT NULL DEFAULT 0.5,
+            created_at    TEXT NOT NULL,
             last_accessed TEXT NOT NULL,
             access_count  INTEGER NOT NULL DEFAULT 0,
-            decay_score   REAL NOT NULL DEFAULT 1.0
+            decay_score   REAL NOT NULL DEFAULT 1.0,
+            embedding     BLOB
         );
 
         CREATE INDEX IF NOT EXISTS idx_memories_agent
@@ -60,17 +67,21 @@ def store_memory(
     """Store a new memory. Returns the stored memory dict."""
     conn = get_connection(db_path)
     now = datetime.now(timezone.utc).isoformat()
-    mem_id = str(uuid.uuid4())[:8]  # short ID for readability
+    mem_id = str(uuid.uuid4())[:8]
     tags_str = ",".join(tags) if tags else ""
+
+    # Generate embedding (None if fastembed unavailable)
+    vec = embed_text(content)
+    embedding_blob = pack_embedding(vec) if vec else None
 
     conn.execute(
         """INSERT INTO memories
-           (id, agent, content, tags, importance, created_at, last_accessed, access_count, decay_score)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1.0)""",
-        (mem_id, agent, content, tags_str, importance, now, now),
+           (id, agent, content, tags, importance, created_at, last_accessed,
+            access_count, decay_score, embedding)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1.0, ?)""",
+        (mem_id, agent, content, tags_str, importance, now, now, embedding_blob),
     )
 
-    # Upsert agent stats
     conn.execute(
         """INSERT INTO agents (name, memory_count, created_at)
            VALUES (?, 1, ?)
@@ -88,6 +99,7 @@ def store_memory(
         "importance": importance,
         "created_at": now,
         "decay_score": 1.0,
+        "has_embedding": vec is not None,
     }
 
 
@@ -98,32 +110,49 @@ def recall_memories(
     db_path: Optional[Path] = None,
 ) -> List[dict]:
     """
-    Recall memories by text search.
-    Step 2: basic FTS via LIKE. Step 3 will add vector similarity.
+    Recall memories by semantic similarity (vector) or keyword fallback.
     """
     conn = get_connection(db_path)
     now = datetime.now(timezone.utc).isoformat()
 
-    # Build query — basic keyword match across content
-    words = query.lower().split()
-    conditions = " AND ".join(["LOWER(content) LIKE ?" for _ in words])
-    params = [f"%{w}%" for w in words]
-
+    # Get candidates (all memories for the agent, or all if no agent filter)
     if agent:
-        conditions = f"agent = ? AND ({conditions})"
-        params = [agent] + params
+        rows = conn.execute(
+            "SELECT * FROM memories WHERE agent = ? ORDER BY created_at DESC LIMIT 200",
+            (agent,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM memories ORDER BY created_at DESC LIMIT 200"
+        ).fetchall()
 
-    params.append(limit)
-    sql = f"""
-        SELECT * FROM memories
-        WHERE {conditions}
-        ORDER BY decay_score DESC, last_accessed DESC
-        LIMIT ?
-    """
-    rows = conn.execute(sql, params).fetchall()
+    if not rows:
+        conn.close()
+        return []
 
-    # Bump access_count + last_accessed for retrieved memories
-    ids = [r["id"] for r in rows]
+    # Try vector similarity if embeddings available
+    query_vec = embed_text(query)
+
+    scored = []
+    for row in rows:
+        if query_vec and row["embedding"]:
+            mem_vec = unpack_embedding(row["embedding"])
+            score = cosine_similarity(query_vec, mem_vec)
+        else:
+            # Keyword fallback: fraction of query words found in content
+            words = query.lower().split()
+            content_lower = row["content"].lower()
+            matches = sum(1 for w in words if w in content_lower)
+            score = matches / max(len(words), 1)
+
+        scored.append((score, row))
+
+    # Sort by score desc, apply decay weighting
+    scored.sort(key=lambda x: x[0] * x[1]["decay_score"], reverse=True)
+    top = scored[:limit]
+
+    # Bump access counts
+    ids = [r["id"] for _, r in top]
     if ids:
         placeholders = ",".join("?" * len(ids))
         conn.execute(
@@ -146,8 +175,10 @@ def recall_memories(
             "decay_score": r["decay_score"],
             "access_count": r["access_count"],
             "created_at": r["created_at"],
+            "similarity": round(score, 4),
         }
-        for r in rows
+        for score, r in top
+        if score > 0.05  # filter near-zero matches
     ]
     conn.close()
     return results
@@ -190,6 +221,7 @@ def list_memories(
             "importance": r["importance"],
             "decay_score": r["decay_score"],
             "created_at": r["created_at"],
+            "has_embedding": r["embedding"] is not None,
         }
         for r in rows
     ]
@@ -208,16 +240,21 @@ def get_stats(db_path: Optional[Path] = None) -> dict:
     """Return basic stats about the memory DB."""
     conn = get_connection(db_path)
     total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+    with_embeddings = conn.execute(
+        "SELECT COUNT(*) FROM memories WHERE embedding IS NOT NULL"
+    ).fetchone()[0]
     agents_count = conn.execute("SELECT COUNT(*) FROM agents").fetchone()[0]
     agents = conn.execute(
         "SELECT agent, COUNT(*) as cnt FROM memories GROUP BY agent"
     ).fetchall()
     db = db_path or DB_PATH
-    size_kb = round(Path(db).stat().st_size / 1024, 1) if Path(db).exists() else 0
+    size_kb = round(Path(str(db)).stat().st_size / 1024, 1) if Path(str(db)).exists() else 0
     conn.close()
     return {
         "total_memories": total,
+        "with_embeddings": with_embeddings,
         "agents_count": agents_count,
         "agents": {r["agent"]: r["cnt"] for r in agents},
         "db_size_kb": size_kb,
+        "vector_search": with_embeddings > 0,
     }

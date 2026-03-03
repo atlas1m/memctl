@@ -67,7 +67,7 @@ def recall(query: str, agent: str, limit: int):
     table.add_column("Content")
     table.add_column("Agent", width=12)
     table.add_column("Tags", width=16)
-    table.add_column("Score", width=7, justify="right")
+    table.add_column("Sim", width=6, justify="right")
 
     for r in results:
         table.add_row(
@@ -75,7 +75,7 @@ def recall(query: str, agent: str, limit: int):
             r["content"],
             r["agent"],
             ", ".join(r["tags"]) or "—",
-            f"{r['decay_score']:.2f}",
+            f"{r.get('similarity', r['decay_score']):.2f}",
         )
 
     console.print(table)
@@ -142,6 +142,8 @@ def stats():
     s = get_stats()
     console.print(f"\n[bold]memctl stats[/bold]")
     console.print(f"  Total memories : [cyan]{s['total_memories']}[/cyan]")
+    console.print(f"  With embeddings: [cyan]{s.get('with_embeddings', 0)}[/cyan]")
+    console.print(f"  Vector search  : [cyan]{'✓' if s.get('vector_search') else '✗ (fastembed needed)'}[/cyan]")
     console.print(f"  Agents         : [cyan]{s['agents_count']}[/cyan]")
     console.print(f"  DB size        : [cyan]{s['db_size_kb']} KB[/cyan]")
 
