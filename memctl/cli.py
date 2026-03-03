@@ -14,6 +14,7 @@ from memctl.db import (
     get_stats,
 )
 from memctl.decay import run_decay, write_default_config
+from memctl.consolidation import consolidate as run_consolidate
 
 console = Console()
 
@@ -182,6 +183,47 @@ def decay(dry_run: bool, apply_decay: bool):
 
     # Write default config if not present
     write_default_config()
+
+
+@main.command()
+@click.option("--agent", "-a", default=None, help="Agent namespace to consolidate")
+@click.option("--dry-run", is_flag=True, default=True, help="Preview only (default)")
+@click.option("--apply", "apply_consolidate", is_flag=True, default=False, help="Actually merge")
+@click.option("--threshold", "-t", default=None, type=float, help="Similarity threshold (default: 0.85)")
+def consolidate(agent: str, dry_run: bool, apply_consolidate: bool, threshold: float):
+    """Merge redundant memories using LLM (Claude Haiku).
+
+    Requires ANTHROPIC_API_KEY for LLM merging.
+    Falls back to simple concatenation if key not set.
+
+    \b
+    Examples:
+        memctl consolidate --agent atlas --dry-run
+        memctl consolidate --agent atlas --apply
+    """
+    is_dry = not apply_consolidate
+    with console.status("[bold]Scanning for similar memories...[/bold]"):
+        actions = run_consolidate(
+            agent=agent,
+            dry_run=is_dry,
+            threshold=threshold,
+        )
+
+    if not actions:
+        console.print("[green]✓[/green] No redundant memories found.")
+        return
+
+    mode = "[dim](dry run)[/dim]" if is_dry else "[bold green](applied)[/bold green]"
+    console.print(f"\n[bold]Found {len(actions)} consolidation(s) {mode}[/bold]\n")
+
+    for i, action in enumerate(actions, 1):
+        console.print(f"[bold]Cluster {i}[/bold] — {action['agent']} ({action['original_count']} memories → 1):")
+        for orig in action["original_texts"]:
+            console.print(f"  [red]- {orig[:100]}[/red]")
+        console.print(f"  [green]→ {action['merged']}[/green]\n")
+
+    if is_dry:
+        console.print("[dim]Run with --apply to merge. Requires ANTHROPIC_API_KEY for LLM consolidation.[/dim]")
 
 
 @main.command()
