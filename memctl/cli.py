@@ -273,6 +273,71 @@ def stats():
     console.print()
 
 
+@main.command()
+def health():
+    """Run a health diagnostic on the memory DB.
+
+    Checks for: orphans, exact duplicates, decay overdue, DB size.
+
+    \b
+    Example:
+        memctl health
+    """
+    from memctl.db import get_connection, DB_PATH
+    import sqlite3
+
+    conn = get_connection()
+    issues = []
+
+    # 1. Exact content duplicates
+    dups = conn.execute("""
+        SELECT content, COUNT(*) as cnt
+        FROM memories
+        GROUP BY LOWER(content)
+        HAVING COUNT(*) > 1
+    """).fetchall()
+    if dups:
+        for d in dups:
+            issues.append(f"[yellow]⚠[/yellow] Duplicate content ({d['cnt']}x): '{d['content'][:60]}'")
+
+    # 2. Decay overdue (score < 0.3, last accessed > 14 days ago)
+    from datetime import datetime, timezone, timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+    overdue = conn.execute("""
+        SELECT COUNT(*) as cnt FROM memories
+        WHERE decay_score < 0.3 AND last_accessed < ?
+    """, (cutoff,)).fetchone()
+    if overdue and overdue["cnt"] > 0:
+        issues.append(f"[yellow]⚠[/yellow] {overdue['cnt']} memories with decay score < 0.3 (run `memctl decay`)")
+
+    # 3. Memories without embeddings
+    no_emb = conn.execute(
+        "SELECT COUNT(*) as cnt FROM memories WHERE embedding IS NULL"
+    ).fetchone()
+    if no_emb and no_emb["cnt"] > 0:
+        issues.append(f"[dim]ℹ[/dim] {no_emb['cnt']} memories without embeddings (recall uses keyword fallback)")
+
+    # 4. DB size
+    db_size_kb = DB_PATH.stat().st_size / 1024 if DB_PATH.exists() else 0
+    if db_size_kb > 50 * 1024:  # > 50MB
+        issues.append(f"[red]✗[/red] DB size {db_size_kb:.0f}KB exceeds 50MB — consider `memctl consolidate`")
+
+    total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+    conn.close()
+
+    console.print(f"\n[bold]memctl health[/bold]")
+    console.print(f"  Total memories : {total}")
+    console.print(f"  DB size        : {db_size_kb:.1f} KB")
+
+    if not issues:
+        console.print(f"\n  [green]✓ All good — no issues detected.[/green]")
+    else:
+        console.print(f"\n  [bold]Issues found ({len(issues)}):[/bold]")
+        for issue in issues:
+            console.print(f"  {issue}")
+    console.print()
+
+
 @main.group()
 def mcp():
     """MCP server commands (for Claude Desktop, Cursor, Windsurf)."""
