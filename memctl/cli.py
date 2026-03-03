@@ -13,6 +13,7 @@ from memctl.db import (
     forget_memory,
     get_stats,
 )
+from memctl.decay import run_decay, write_default_config
 
 console = Console()
 
@@ -129,6 +130,58 @@ def forget(memory_id: str):
         console.print(f"[green]✓[/green] Memory [{memory_id}] deleted.")
     else:
         console.print(f"[red]✗[/red] Memory [{memory_id}] not found.")
+
+
+@main.command()
+@click.option("--dry-run", is_flag=True, default=True, help="Preview only (default)")
+@click.option("--apply", "apply_decay", is_flag=True, default=False, help="Actually apply decay")
+def decay(dry_run: bool, apply_decay: bool):
+    """Run memory decay — forget unused memories.
+
+    \b
+    Examples:
+        memctl decay --dry-run   # preview what would be forgotten
+        memctl decay --apply     # apply decay (remove low-score memories)
+    """
+    # --apply overrides --dry-run
+    is_dry = not apply_decay
+
+    to_delete, to_update = run_decay(dry_run=is_dry)
+
+    if not to_delete and not to_update:
+        console.print("[green]✓[/green] No decay needed — all memories are fresh.")
+        return
+
+    mode = "[dim](dry run)[/dim]" if is_dry else "[bold red](applied)[/bold red]"
+
+    if to_delete:
+        table = Table(title=f"Memories to remove {mode}", show_header=True)
+        table.add_column("ID", style="dim", width=10)
+        table.add_column("Agent", width=12)
+        table.add_column("Content")
+        table.add_column("Score", width=12, justify="right")
+        table.add_column("Last accessed", width=18)
+
+        for entry in to_delete:
+            table.add_row(
+                entry["id"],
+                entry["agent"],
+                entry["content"],
+                f"{entry['old_score']:.2f} → [red]{entry['new_score']:.2f}[/red]",
+                entry["last_accessed"],
+            )
+        console.print(table)
+        action = "Would remove" if is_dry else "Removed"
+        console.print(f"\n{action} [red]{len(to_delete)}[/red] memories.")
+
+    if to_update:
+        console.print(f"\n[dim]Score updated for {len(to_update)} memories (still above threshold).[/dim]")
+
+    if is_dry:
+        console.print("\n[dim]Run with --apply to actually apply decay.[/dim]")
+
+    # Write default config if not present
+    write_default_config()
 
 
 @main.command()
