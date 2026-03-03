@@ -271,3 +271,27 @@ def stats():
         for agent, count in s["agents"].items():
             console.print(f"    {agent}: {count}")
     console.print()
+
+
+@main.group()
+def mcp():
+    """MCP server commands (for Claude Desktop, Cursor, Windsurf)."""
+
+
+@mcp.command("serve")
+def mcp_serve():
+    """Start the MCP server (stdio transport).
+
+    \b
+    Add to claude_desktop_config.json:
+        {
+          "mcpServers": {
+            "memctl": {
+              "command": "memctl",
+              "args": ["mcp", "serve"]
+            }
+          }
+        }
+    """
+    from memctl.mcp_server import serve
+    serve()

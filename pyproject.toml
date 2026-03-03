@@ -26,6 +26,13 @@ dependencies = [
 embeddings = [
     "fastembed>=0.3.0",
 ]
+mcp = [
+    "mcp>=1.0.0",
+]
+all = [
+    "fastembed>=0.3.0",
+    "mcp>=1.0.0",
+]
 dev = [
     "pytest>=7.0",
 ]
