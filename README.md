@@ -34,22 +34,49 @@ pip install memoctl[all]
 ## Quick start
 
 ```bash
-# Store a memory
-memctl store "Polar API expects price in cents, not euros"
+pip install memoctl
+```
 
-# Recall by semantic similarity
+```bash
+# Store a fact
+memctl store "Polar API expects price in cents, not euros"
+# ✓ Stored [c50ad1d2] (agent: default, importance: 0.5)
+
+# Store with agent namespace and tags
+memctl store "Always run tests before push" --agent forge --tags ci,rules
+# ✓ Stored [a1b2c3d4] (agent: forge, importance: 0.5)
+
+# Store with higher importance
+memctl store "Production DB is read-only on weekends" --importance 0.9
+# ✓ Stored [f9e8d7c6] (agent: default, importance: 0.9)
+
+# Recall by keyword (or vector similarity with [embeddings])
 memctl recall "polar payment"
-# ┌────────────┬──────────────────────────────────────┬────────┐
-# │ ID         │ Content                              │  Sim   │
-# ├────────────┼──────────────────────────────────────┼────────┤
-# │ c50ad1d2   │ Polar API expects price in cents...  │  0.78  │
-# └────────────┴──────────────────────────────────────┴────────┘
+# ┌────────────┬──────────────────────────────────────┬─────────┬──────┐
+# │ ID         │ Content                              │ Agent   │ Sim  │
+# ├────────────┼──────────────────────────────────────┼─────────┼──────┤
+# │ c50ad1d2   │ Polar API expects price in cents...  │ default │ 0.78 │
+# └────────────┴──────────────────────────────────────┴─────────┴──────┘
+
+# Recall filtered by agent
+memctl recall "tests" --agent forge --limit 3
 
 # List all memories
 memctl list
+# List for a specific agent, last 7 days
+memctl list --agent forge --since 7
 
-# Health check
+# Forget a specific memory by ID
+memctl forget c50ad1d2
+
+# Run decay — preview stale memories (dry-run)
+memctl decay --dry-run
+# Apply decay and remove low-score memories
+memctl decay --apply
+
+# Check DB health and stats
 memctl health
+memctl stats
 ```
 
 ---
